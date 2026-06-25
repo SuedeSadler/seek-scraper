@@ -17,20 +17,25 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const PORT = process.env.PORT || 8080;
 
 const CATEGORIES = [
-  { name: "information-technology", label: "Technology" },
-  { name: "engineering", label: "Engineering" },
-  { name: "accounting", label: "Accounting" },
-  { name: "marketing-communications", label: "Marketing" },
-  { name: "sales", label: "Sales" },
-  { name: "healthcare-medical", label: "Healthcare" },
-  { name: "education-training", label: "Education" },
-  { name: "trades-services", label: "Trades & Services" },
-  { name: "administration-office-support", label: "Administration" },
-  { name: "construction", label: "Construction" },
+  { slug: "trades-services", label: "Trades & Services" },
+  { slug: "healthcare", label: "Healthcare" },
+  { slug: "construction-roading", label: "Construction" },
+  { slug: "it", label: "IT" },
+  { slug: "engineering", label: "Engineering" },
+  { slug: "education", label: "Education" },
+  { slug: "hospitality-tourism", label: "Hospitality & Tourism" },
+  { slug: "transport-logistics", label: "Transport & Logistics" },
+  { slug: "manufacturing-operations", label: "Manufacturing" },
+  { slug: "retail", label: "Retail" },
+  { slug: "sales", label: "Sales" },
+  { slug: "accounting", label: "Accounting" },
+  { slug: "office-administration", label: "Administration" },
+  { slug: "marketing-media-communications", label: "Marketing" },
+  { slug: "automotive", label: "Automotive" },
 ];
 
-const MAX_PAGES_PER_CATEGORY = 10;
-const DELAY_MS = 1500;
+const MAX_PAGES_PER_CATEGORY = 20;
+const DELAY_MS = 2000;
 
 let isRunning = false;
 let lastRun = null;
@@ -44,48 +49,46 @@ async function scrapeCategory(page, category) {
   const listings = [];
 
   for (let pageNum = 1; pageNum <= MAX_PAGES_PER_CATEGORY; pageNum++) {
-    const url = `https://www.seek.co.nz/${category.name}-jobs/in-All-New-Zealand?page=${pageNum}`;
+    const url = `https://www.trademe.co.nz/a/jobs/${category.slug}/search?page=${pageNum}`;
     console.log(`  -> Page ${pageNum}: ${url}`);
 
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
       await sleep(DELAY_MS);
 
-      const noResults = await page.$('[data-automation="NoResultsPanel"]');
-      if (noResults) {
-        console.log(`  No more results at page ${pageNum}`);
-        break;
-      }
-
       const jobs = await page.evaluate((cat) => {
-        const cards = document.querySelectorAll('[data-automation="normalJob"]');
+        const cards = document.querySelectorAll("tm-promoted-listing-card");
         return Array.from(cards).map((card) => {
-          const titleEl = card.querySelector('[data-automation="jobTitle"]');
-          const companyEl = card.querySelector('[data-automation="jobCompany"]');
-          const locationEl = card.querySelector('[data-automation="jobLocation"]');
-          const salaryEl = card.querySelector('[data-automation="jobSalary"]');
-          const descEl = card.querySelector('[data-automation="jobShortDescription"]');
-          const listingDateEl = card.querySelector('[data-automation="jobListingDate"]');
-          const linkEl = card.querySelector('a[data-automation="jobTitle"]');
+          const titleEl = card.querySelector(".tm-promoted-listing-info__title");
+          const locationEl = card.querySelector(".jobs-search-card-metadata__location");
+          const dateEl = card.querySelector(".jobs-search-card-metadata__time");
+          const descEl = card.querySelector(".tm-promoted-listing-info__short-description");
+          const salaryEl = card.querySelector(".tm-promoted-listing-info__approximate-pay-range");
+          const linkEl = card.querySelector("a.tm-promoted-listing-card__link");
 
           return {
             title: titleEl?.innerText?.trim() || null,
-            company: companyEl?.innerText?.trim() || null,
             location: locationEl?.innerText?.trim() || null,
-            salary: salaryEl?.innerText?.trim() || null,
+            listing_date: dateEl?.innerText?.trim() || null,
             description_snippet: descEl?.innerText?.trim() || null,
-            listing_date: listingDateEl?.innerText?.trim() || null,
-            seek_url: linkEl ? "https://www.seek.co.nz" + linkEl.getAttribute("href") : null,
+            salary: salaryEl?.innerText?.trim() || null,
+            trademe_url: linkEl ? "https://www.trademe.co.nz" + linkEl.getAttribute("href") : null,
             category: cat.label,
           };
         });
       }, category);
 
-      const valid = jobs.filter((j) => j.title && j.company);
+      const valid = jobs.filter((j) => j.title && j.trademe_url);
       console.log(`     Found ${valid.length} listings`);
+
+      if (valid.length === 0) {
+        console.log(`  No listings found, stopping category`);
+        break;
+      }
+
       listings.push(...valid);
 
-      if (valid.length < 20) break;
+      if (valid.length < 15) break; // last page
     } catch (err) {
       console.error(`  Error on page ${pageNum}:`, err.message);
       break;
@@ -107,7 +110,6 @@ async function embedAndStore(listings) {
 
     const texts = batch.map((job) => [
       `Job Title: ${job.title}`,
-      `Company: ${job.company}`,
       `Location: ${job.location || "Not specified"}`,
       `Category: ${job.category}`,
       `Salary: ${job.salary || "Not specified"}`,
@@ -122,13 +124,13 @@ async function embedAndStore(listings) {
 
       const rows = batch.map((job, idx) => ({
         title: job.title,
-        company: job.company,
+        company: null,
         location: job.location,
         salary: job.salary,
         category: job.category,
         description_snippet: job.description_snippet,
         listing_date: job.listing_date,
-        seek_url: job.seek_url,
+        seek_url: job.trademe_url,
         scraped_at: new Date().toISOString(),
         embedding: embeddingResponse.data[idx].embedding,
       }));
@@ -200,54 +202,17 @@ async function runScrape() {
   }
 }
 
-async function debugPage() {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-  const context = await browser.newContext({
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    locale: "en-NZ",
-  });
-  const page = await context.newPage();
-  await page.goto("https://www.trademe.co.nz/a/jobs/search?search_string=&category=5000", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  });
-  await sleep(5000);
-  const html = await page.content();
-  await browser.close();
-  return html;
-}
-
 // HTTP server
 const server = http.createServer(async (req, res) => {
-  // Status check
+  res.setHeader("Content-Type", "application/json");
+
   if (req.method === "GET" && req.url === "/") {
-    res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
     res.end(JSON.stringify({ status: "ok", isRunning, lastRun, lastResult }));
     return;
   }
 
-  // Debug: dump rendered HTML to inspect selectors
-  if (req.method === "GET" && req.url === "/debug") {
-    try {
-      const html = await debugPage();
-      res.setHeader("Content-Type", "text/html");
-      res.writeHead(200);
-      res.end(html);
-    } catch (err) {
-      res.setHeader("Content-Type", "application/json");
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: err.message }));
-    }
-    return;
-  }
-
-  // Trigger scrape
   if (req.method === "POST" && req.url === "/scrape") {
-    res.setHeader("Content-Type", "application/json");
     if (isRunning) {
       res.writeHead(409);
       res.end(JSON.stringify({ error: "Scrape already in progress" }));
@@ -259,7 +224,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  res.setHeader("Content-Type", "application/json");
   res.writeHead(404);
   res.end(JSON.stringify({ error: "Not found" }));
 });
@@ -268,5 +232,4 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`POST /scrape to trigger a run`);
   console.log(`GET  /       to check status`);
-  console.log(`GET  /debug  to dump Seek HTML`);
 });

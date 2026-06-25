@@ -53,9 +53,17 @@ async function runActor() {
   }
 
   const resultsRes = await fetch(
-    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&format=json`
+    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&format=json&limit=1000`
   );
-  const items = await resultsRes.json();
+  const rawText = await resultsRes.text();
+  console.log(`Results response (first 300): ${rawText.slice(0, 300)}`);
+  let items = [];
+  try {
+    const parsed = JSON.parse(rawText);
+    items = Array.isArray(parsed) ? parsed : (parsed.items || parsed.data || []);
+  } catch(e) {
+    console.error("Parse error:", e.message);
+  }
   console.log(`Got ${items.length} results`);
   return items;
 }

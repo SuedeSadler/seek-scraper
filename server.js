@@ -211,10 +211,10 @@ async function debugPage() {
   });
   const page = await context.newPage();
   await page.goto("https://www.seek.co.nz/information-technology-jobs/in-All-New-Zealand?page=1", {
-    waitUntil: "networkidle",
-    timeout: 30000,
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
   });
-  await sleep(3000);
+  await sleep(5000);
   const html = await page.content();
   await browser.close();
   return html;

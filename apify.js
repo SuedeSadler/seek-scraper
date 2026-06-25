@@ -13,33 +13,42 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const APIFY_TOKEN = process.env.APIFY_API_KEY;
 const ACTOR_ID = "websift~seek-job-scraper";
 
+const SEEK_CATEGORIES = [
+  { url: "https://www.seek.co.nz/information-technology-jobs/in-All-New-Zealand", label: "IT" },
+  { url: "https://www.seek.co.nz/healthcare-medical-jobs/in-All-New-Zealand", label: "Healthcare" },
+  { url: "https://www.seek.co.nz/trades-services-jobs/in-All-New-Zealand", label: "Trades & Services" },
+  { url: "https://www.seek.co.nz/engineering-jobs/in-All-New-Zealand", label: "Engineering" },
+  { url: "https://www.seek.co.nz/accounting-jobs/in-All-New-Zealand", label: "Accounting" },
+  { url: "https://www.seek.co.nz/construction-jobs/in-All-New-Zealand", label: "Construction" },
+  { url: "https://www.seek.co.nz/hospitality-tourism-jobs/in-All-New-Zealand", label: "Hospitality" },
+  { url: "https://www.seek.co.nz/sales-jobs/in-All-New-Zealand", label: "Sales" },
+  { url: "https://www.seek.co.nz/education-training-jobs/in-All-New-Zealand", label: "Education" },
+];
+
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function runActor() {
-  console.log("Starting Apify actor — all NZ jobs");
-  const actorInput = {
-    searchUrl: "https://www.seek.co.nz/jobs/in-All-New-Zealand",
-    maxResults: 100,
-  };
-  console.log("Input being sent:", JSON.stringify(actorInput));
+async function runActor(category) {
+  console.log(`\nScraping: ${category.label}`);
 
   const runRes = await fetch(
     `https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_TOKEN}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(actorInput),
+      body: JSON.stringify({
+        searchUrl: category.url,
+        maxResults: 200,
+      }),
     }
   );
 
   const runData = await runRes.json();
   const runId = runData?.data?.id;
-  if (!runId) throw new Error(`Failed to start actor: ${JSON.stringify(runData)}`);
-  console.log(`Run ID: ${runId}`);
+  if (!runId) throw new Error(`Failed to start: ${JSON.stringify(runData)}`);
+  console.log(`  Run ID: ${runId}`);
 
-  // Poll until finished (max 20 mins)
   for (let i = 0; i < 120; i++) {
     await sleep(10000);
     const statusRes = await fetch(
@@ -47,47 +56,28 @@ async function runActor() {
     );
     const statusData = await statusRes.json();
     const status = statusData?.data?.status;
-    console.log(`Status: ${status}`);
+    console.log(`  Status: ${status}`);
     if (status === "SUCCEEDED") break;
-    if (status === "FAILED" || status === "ABORTED") {
-      throw new Error(`Actor run ${status}`);
-    }
+    if (status === "FAILED" || status === "ABORTED") throw new Error(`Actor ${status}`);
   }
 
-  // First get the run details to find the correct dataset ID
   const runDetailsRes = await fetch(
     `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`
   );
   const runDetails = await runDetailsRes.json();
   const datasetId = runDetails?.data?.defaultDatasetId;
-  console.log(`Dataset ID: ${datasetId}`);
-  console.log(`Stats: ${JSON.stringify(runDetails?.data?.stats)}`);
-  console.log(`Input: ${JSON.stringify(runDetails?.data?.input)}`);
-  console.log(`Options: ${JSON.stringify(runDetails?.data?.options)}`);
-
-  if (!datasetId) {
-    console.error("No dataset ID found");
-    return [];
-  }
 
   const resultsRes = await fetch(
     `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&format=json&limit=1000`
   );
-  const rawText = await resultsRes.text();
-  console.log(`Results response (first 300): ${rawText.slice(0, 300)}`);
-  let items = [];
-  try {
-    const parsed = JSON.parse(rawText);
-    items = Array.isArray(parsed) ? parsed : (parsed.items || parsed.data || []);
-  } catch(e) {
-    console.error("Parse error:", e.message);
-  }
-  console.log(`Got ${items.length} results`);
-  return items;
+  const items = await resultsRes.json();
+  const listings = Array.isArray(items) ? items : [];
+  console.log(`  Got ${listings.length} listings`);
+  return listings.map((item) => ({ ...item, _category: category.label }));
 }
 
 async function embedAndStore(listings) {
-  console.log(`\nEmbedding ${listings.length} Seek listings...`);
+  console.log(`\nEmbedding ${listings.length} listings...`);
   const BATCH_SIZE = 20;
   let stored = 0;
 
@@ -98,7 +88,7 @@ async function embedAndStore(listings) {
       `Job Title: ${job.title || ""}`,
       `Company: ${job.advertiser?.name || ""}`,
       `Location: ${job.joblocationInfo?.displayLocation || ""}`,
-      `Category: ${job.classificationInfo?.classification || ""}`,
+      `Category: ${job._category}`,
       `Sub-category: ${job.classificationInfo?.subClassification || ""}`,
       `Salary: ${job.salary || "Not specified"}`,
       `Work type: ${job.workTypes || ""}`,
@@ -118,7 +108,7 @@ async function embedAndStore(listings) {
         company: job.advertiser?.name || null,
         location: job.joblocationInfo?.displayLocation || null,
         salary: job.salary || null,
-        category: job.classificationInfo?.classification || null,
+        category: job._category,
         description_snippet: (job.content?.bulletPoints || []).join(" · ") || job.content?.jobHook || null,
         listing_date: job.listedAt || null,
         seek_url: job.jobLink || null,
@@ -132,13 +122,13 @@ async function embedAndStore(listings) {
       });
 
       if (error) {
-        console.error("Supabase error:", error.message);
+        console.error("  Supabase error:", error.message);
       } else {
         stored += rows.length;
-        console.log(`Stored ${stored}/${listings.length}`);
+        console.log(`  Stored ${stored}/${listings.length}`);
       }
     } catch (err) {
-      console.error(`Embedding error at batch ${i}:`, err.message);
+      console.error(`  Embedding error at batch ${i}:`, err.message);
     }
 
     await sleep(200);
@@ -149,10 +139,20 @@ async function embedAndStore(listings) {
 
 export async function runApifyScrape() {
   console.log("\n=== Apify Seek scrape started ===");
+  const allListings = [];
 
-  const listings = await runActor();
-  console.log(`\nTotal Seek listings: ${listings.length}`);
-  const stored = await embedAndStore(listings);
+  for (const category of SEEK_CATEGORIES) {
+    try {
+      const listings = await runActor(category);
+      allListings.push(...listings);
+    } catch (err) {
+      console.error(`Failed for ${category.label}:`, err.message);
+    }
+    await sleep(2000);
+  }
+
+  console.log(`\nTotal Seek listings: ${allListings.length}`);
+  const stored = await embedAndStore(allListings);
   console.log(`\n=== Apify done. Stored: ${stored} ===`);
   return stored;
 }

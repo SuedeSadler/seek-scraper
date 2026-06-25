@@ -52,8 +52,22 @@ async function runActor() {
     }
   }
 
+  // First get the run details to find the correct dataset ID
+  const runDetailsRes = await fetch(
+    `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`
+  );
+  const runDetails = await runDetailsRes.json();
+  const datasetId = runDetails?.data?.defaultDatasetId;
+  console.log(`Dataset ID: ${datasetId}`);
+  console.log(`Stats: ${JSON.stringify(runDetails?.data?.stats)}`);
+
+  if (!datasetId) {
+    console.error("No dataset ID found");
+    return [];
+  }
+
   const resultsRes = await fetch(
-    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&format=json&limit=1000`
+    `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&format=json&limit=1000`
   );
   const rawText = await resultsRes.text();
   console.log(`Results response (first 300): ${rawText.slice(0, 300)}`);

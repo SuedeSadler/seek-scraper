@@ -23,4 +23,4 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 
-CMD ["node", "scraper.js"]
+CMD ["node", "server.js"]

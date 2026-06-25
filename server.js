@@ -45,7 +45,7 @@ async function scrapeCategory(page, category) {
 
   for (let pageNum = 1; pageNum <= MAX_PAGES_PER_CATEGORY; pageNum++) {
     const url = `https://www.seek.co.nz/${category.name}-jobs/in-All-New-Zealand?page=${pageNum}`;
-    console.log(`  → Page ${pageNum}: ${url}`);
+    console.log(`  -> Page ${pageNum}: ${url}`);
 
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -53,7 +53,7 @@ async function scrapeCategory(page, category) {
 
       const noResults = await page.$('[data-automation="NoResultsPanel"]');
       if (noResults) {
-        console.log(`  ✓ No more results at page ${pageNum}`);
+        console.log(`  No more results at page ${pageNum}`);
         break;
       }
 
@@ -87,7 +87,7 @@ async function scrapeCategory(page, category) {
 
       if (valid.length < 20) break;
     } catch (err) {
-      console.error(`  ✗ Error on page ${pageNum}:`, err.message);
+      console.error(`  Error on page ${pageNum}:`, err.message);
       break;
     }
   }
@@ -139,13 +139,13 @@ async function embedAndStore(listings) {
       });
 
       if (error) {
-        console.error("  ✗ Supabase error:", error.message);
+        console.error("  Supabase error:", error.message);
       } else {
         stored += rows.length;
-        process.stdout.write(`  ✓ ${stored}/${listings.length}\r`);
+        console.log(`  Stored ${stored}/${listings.length}`);
       }
     } catch (err) {
-      console.error(`  ✗ Embedding error at batch ${i}:`, err.message);
+      console.error(`  Embedding error at batch ${i}:`, err.message);
       skipped += batch.length;
     }
 
@@ -200,37 +200,66 @@ async function runScrape() {
   }
 }
 
-// HTTP server — keeps Railway alive + exposes trigger endpoint
-const server = http.createServer((req, res) => {
-  res.setHeader("Content-Type", "application/json");
+async function debugPage() {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    locale: "en-NZ",
+  });
+  const page = await context.newPage();
+  await page.goto("https://www.seek.co.nz/information-technology-jobs/in-All-New-Zealand?page=1", {
+    waitUntil: "networkidle",
+    timeout: 30000,
+  });
+  await sleep(3000);
+  const html = await page.content();
+  await browser.close();
+  return html;
+}
 
+// HTTP server
+const server = http.createServer(async (req, res) => {
   // Status check
   if (req.method === "GET" && req.url === "/") {
+    res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
-    res.end(JSON.stringify({
-      status: "ok",
-      isRunning,
-      lastRun,
-      lastResult,
-    }));
+    res.end(JSON.stringify({ status: "ok", isRunning, lastRun, lastResult }));
     return;
   }
 
-  // Trigger a scrape run
+  // Debug: dump rendered HTML to inspect selectors
+  if (req.method === "GET" && req.url === "/debug") {
+    try {
+      const html = await debugPage();
+      res.setHeader("Content-Type", "text/html");
+      res.writeHead(200);
+      res.end(html);
+    } catch (err) {
+      res.setHeader("Content-Type", "application/json");
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // Trigger scrape
   if (req.method === "POST" && req.url === "/scrape") {
+    res.setHeader("Content-Type", "application/json");
     if (isRunning) {
       res.writeHead(409);
       res.end(JSON.stringify({ error: "Scrape already in progress" }));
       return;
     }
-
-    // Kick off async, respond immediately
     runScrape();
     res.writeHead(202);
     res.end(JSON.stringify({ message: "Scrape started", startedAt: lastRun }));
     return;
   }
 
+  res.setHeader("Content-Type", "application/json");
   res.writeHead(404);
   res.end(JSON.stringify({ error: "Not found" }));
 });
@@ -239,4 +268,5 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`POST /scrape to trigger a run`);
   console.log(`GET  /       to check status`);
+  console.log(`GET  /debug  to dump Seek HTML`);
 });

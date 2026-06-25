@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
+import http from "http";
 import * as dotenv from "dotenv";
 dotenv.config();
 
@@ -11,7 +12,8 @@ const supabase = createClient(
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Categories to scrape — add/remove as needed
+const PORT = process.env.PORT || 8080;
+
 const CATEGORIES = [
   { name: "information-technology", label: "Technology" },
   { name: "engineering", label: "Engineering" },
@@ -25,8 +27,12 @@ const CATEGORIES = [
   { name: "construction", label: "Construction" },
 ];
 
-const MAX_PAGES_PER_CATEGORY = 10; // ~220 listings per category, ~2200 total
-const DELAY_MS = 1500; // be polite
+const MAX_PAGES_PER_CATEGORY = 10;
+const DELAY_MS = 1500;
+
+let isRunning = false;
+let lastRun = null;
+let lastResult = null;
 
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -43,29 +49,21 @@ async function scrapeCategory(page, category) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await sleep(DELAY_MS);
 
-      // Check if we've run out of pages
       const noResults = await page.$('[data-automation="NoResultsPanel"]');
       if (noResults) {
         console.log(`  ✓ No more results at page ${pageNum}`);
         break;
       }
 
-      // Extract job cards from the search results
       const jobs = await page.evaluate((cat) => {
         const cards = document.querySelectorAll('[data-automation="normalJob"]');
         return Array.from(cards).map((card) => {
           const titleEl = card.querySelector('[data-automation="jobTitle"]');
           const companyEl = card.querySelector('[data-automation="jobCompany"]');
-          const locationEl = card.querySelector(
-            '[data-automation="jobLocation"]'
-          );
+          const locationEl = card.querySelector('[data-automation="jobLocation"]');
           const salaryEl = card.querySelector('[data-automation="jobSalary"]');
-          const descEl = card.querySelector(
-            '[data-automation="jobShortDescription"]'
-          );
-          const listingDateEl = card.querySelector(
-            '[data-automation="jobListingDate"]'
-          );
+          const descEl = card.querySelector('[data-automation="jobShortDescription"]');
+          const listingDateEl = card.querySelector('[data-automation="jobListingDate"]');
           const linkEl = card.querySelector('a[data-automation="jobTitle"]');
 
           return {
@@ -75,9 +73,7 @@ async function scrapeCategory(page, category) {
             salary: salaryEl?.innerText?.trim() || null,
             description_snippet: descEl?.innerText?.trim() || null,
             listing_date: listingDateEl?.innerText?.trim() || null,
-            seek_url: linkEl
-              ? "https://www.seek.co.nz" + linkEl.getAttribute("href")
-              : null,
+            seek_url: linkEl ? "https://www.seek.co.nz" + linkEl.getAttribute("href") : null,
             category: cat.label,
           };
         });
@@ -87,7 +83,6 @@ async function scrapeCategory(page, category) {
       console.log(`     Found ${valid.length} listings`);
       listings.push(...valid);
 
-      // If fewer than 20 results, probably the last page
       if (valid.length < 20) break;
     } catch (err) {
       console.error(`  ✗ Error on page ${pageNum}:`, err.message);
@@ -108,17 +103,14 @@ async function embedAndStore(listings) {
   for (let i = 0; i < listings.length; i += BATCH_SIZE) {
     const batch = listings.slice(i, i + BATCH_SIZE);
 
-    // Build text to embed for each listing
-    const texts = batch.map((job) => {
-      return [
-        `Job Title: ${job.title}`,
-        `Company: ${job.company}`,
-        `Location: ${job.location || "Not specified"}`,
-        `Category: ${job.category}`,
-        `Salary: ${job.salary || "Not specified"}`,
-        `Description: ${job.description_snippet || ""}`,
-      ].join("\n");
-    });
+    const texts = batch.map((job) => [
+      `Job Title: ${job.title}`,
+      `Company: ${job.company}`,
+      `Location: ${job.location || "Not specified"}`,
+      `Category: ${job.category}`,
+      `Salary: ${job.salary || "Not specified"}`,
+      `Description: ${job.description_snippet || ""}`,
+    ].join("\n"));
 
     try {
       const embeddingResponse = await openai.embeddings.create({
@@ -140,7 +132,7 @@ async function embedAndStore(listings) {
       }));
 
       const { error } = await supabase.from("job_listings").upsert(rows, {
-        onConflict: "seek_url", // skip duplicates by URL
+        onConflict: "seek_url",
         ignoreDuplicates: true,
       });
 
@@ -155,49 +147,94 @@ async function embedAndStore(listings) {
       skipped += batch.length;
     }
 
-    await sleep(200); // stay under OpenAI rate limits
+    await sleep(200);
   }
 
-  console.log(`\n  Stored: ${stored}, Skipped: ${skipped}`);
+  return { stored, skipped };
 }
 
-async function run() {
-  console.log("=== Seek NZ Job Scraper ===");
-  console.log(`Started: ${new Date().toISOString()}\n`);
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    locale: "en-NZ",
-  });
-
-  const page = await context.newPage();
-  const allListings = [];
-
-  for (const category of CATEGORIES) {
-    console.log(`\nScraping: ${category.label}`);
-    const listings = await scrapeCategory(page, category);
-    console.log(`  Total for ${category.label}: ${listings.length}`);
-    allListings.push(...listings);
+async function runScrape() {
+  if (isRunning) {
+    console.log("Scrape already in progress, skipping");
+    return;
   }
 
-  await browser.close();
+  isRunning = true;
+  lastRun = new Date().toISOString();
+  console.log(`\n=== Scrape started: ${lastRun} ===`);
 
-  console.log(`\nTotal listings scraped: ${allListings.length}`);
+  try {
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-  if (allListings.length > 0) {
-    await embedAndStore(allListings);
+    const context = await browser.newContext({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      locale: "en-NZ",
+    });
+
+    const page = await context.newPage();
+    const allListings = [];
+
+    for (const category of CATEGORIES) {
+      console.log(`\nScraping: ${category.label}`);
+      const listings = await scrapeCategory(page, category);
+      console.log(`  Total for ${category.label}: ${listings.length}`);
+      allListings.push(...listings);
+    }
+
+    await browser.close();
+    console.log(`\nTotal scraped: ${allListings.length}`);
+
+    const result = await embedAndStore(allListings);
+    lastResult = { ...result, total: allListings.length, completedAt: new Date().toISOString() };
+    console.log(`\n=== Done: ${lastResult.completedAt} ===`);
+  } catch (err) {
+    console.error("Scrape failed:", err);
+    lastResult = { error: err.message };
+  } finally {
+    isRunning = false;
   }
-
-  console.log(`\nDone: ${new Date().toISOString()}`);
 }
 
-run().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
+// HTTP server — keeps Railway alive + exposes trigger endpoint
+const server = http.createServer((req, res) => {
+  res.setHeader("Content-Type", "application/json");
+
+  // Status check
+  if (req.method === "GET" && req.url === "/") {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      status: "ok",
+      isRunning,
+      lastRun,
+      lastResult,
+    }));
+    return;
+  }
+
+  // Trigger a scrape run
+  if (req.method === "POST" && req.url === "/scrape") {
+    if (isRunning) {
+      res.writeHead(409);
+      res.end(JSON.stringify({ error: "Scrape already in progress" }));
+      return;
+    }
+
+    // Kick off async, respond immediately
+    runScrape();
+    res.writeHead(202);
+    res.end(JSON.stringify({ message: "Scrape started", startedAt: lastRun }));
+    return;
+  }
+
+  res.writeHead(404);
+  res.end(JSON.stringify({ error: "Not found" }));
+});
+
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`POST /scrape to trigger a run`);
+  console.log(`GET  /       to check status`);
 });

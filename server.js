@@ -2,12 +2,14 @@ import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import http from "http";
+import ws from "ws";
 import * as dotenv from "dotenv";
 dotenv.config();
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
+  { realtime: { transport: ws } }
 );
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

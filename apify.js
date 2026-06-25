@@ -11,7 +11,7 @@ const supabase = createClient(
 );
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const APIFY_TOKEN = process.env.APIFY_API_KEY;
-const ACTOR_ID = "5BAoYcBhwvPuMtd0K";
+const ACTOR_ID = "websift~seek-job-scraper";
 
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -19,16 +19,18 @@ async function sleep(ms) {
 
 async function runActor() {
   console.log("Starting Apify actor — all NZ jobs");
+  const actorInput = {
+    searchUrl: "https://www.seek.co.nz/jobs/in-All-New-Zealand",
+    maxResults: 100,
+  };
+  console.log("Input being sent:", JSON.stringify(actorInput));
 
   const runRes = await fetch(
     `https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_TOKEN}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        searchUrl: "https://www.seek.co.nz/jobs/in-All-New-Zealand",
-        maxResults: 500,
-      }),
+      body: JSON.stringify(actorInput),
     }
   );
 
@@ -60,6 +62,8 @@ async function runActor() {
   const datasetId = runDetails?.data?.defaultDatasetId;
   console.log(`Dataset ID: ${datasetId}`);
   console.log(`Stats: ${JSON.stringify(runDetails?.data?.stats)}`);
+  console.log(`Input: ${JSON.stringify(runDetails?.data?.input)}`);
+  console.log(`Options: ${JSON.stringify(runDetails?.data?.options)}`);
 
   if (!datasetId) {
     console.error("No dataset ID found");

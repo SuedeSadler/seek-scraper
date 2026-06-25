@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { runApifyScrape } from "./apify.js";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import http from "http";

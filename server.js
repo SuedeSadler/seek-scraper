@@ -213,6 +213,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/apify-scrape") {
+    if (isRunning) {
+      res.writeHead(409);
+      res.end(JSON.stringify({ error: "Scrape already in progress" }));
+      return;
+    }
+    isRunning = true;
+    lastRun = new Date().toISOString();
+    runApifyScrape()
+      .then(stored => { lastResult = { stored, source: "apify", completedAt: new Date().toISOString() }; })
+      .catch(err => { lastResult = { error: err.message }; })
+      .finally(() => { isRunning = false; });
+    res.writeHead(202);
+    res.end(JSON.stringify({ message: "Apify scrape started", startedAt: lastRun }));
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/scrape") {
     if (isRunning) {
       res.writeHead(409);

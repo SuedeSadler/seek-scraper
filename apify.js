@@ -14,15 +14,15 @@ const APIFY_TOKEN = process.env.APIFY_API_KEY;
 const ACTOR_ID = "websift~seek-job-scraper";
 
 const SEEK_CATEGORIES = [
-  { url: "https://www.seek.co.nz/information-technology-jobs/in-All-New-Zealand", label: "IT" },
-  { url: "https://www.seek.co.nz/healthcare-medical-jobs/in-All-New-Zealand", label: "Healthcare" },
-  { url: "https://www.seek.co.nz/trades-services-jobs/in-All-New-Zealand", label: "Trades & Services" },
-  { url: "https://www.seek.co.nz/engineering-jobs/in-All-New-Zealand", label: "Engineering" },
-  { url: "https://www.seek.co.nz/accounting-jobs/in-All-New-Zealand", label: "Accounting" },
-  { url: "https://www.seek.co.nz/construction-jobs/in-All-New-Zealand", label: "Construction" },
-  { url: "https://www.seek.co.nz/hospitality-tourism-jobs/in-All-New-Zealand", label: "Hospitality" },
-  { url: "https://www.seek.co.nz/sales-jobs/in-All-New-Zealand", label: "Sales" },
-  { url: "https://www.seek.co.nz/education-training-jobs/in-All-New-Zealand", label: "Education" },
+  { url: "https://www.seek.co.nz/information-technology-jobs/in-Auckland", label: "IT" },
+  { url: "https://www.seek.co.nz/healthcare-medical-jobs/in-Auckland", label: "Healthcare" },
+  { url: "https://www.seek.co.nz/trades-services-jobs/in-Auckland", label: "Trades & Services" },
+  { url: "https://www.seek.co.nz/engineering-jobs/in-Auckland", label: "Engineering" },
+  { url: "https://www.seek.co.nz/accounting-jobs/in-Auckland", label: "Accounting" },
+  { url: "https://www.seek.co.nz/construction-jobs/in-Auckland", label: "Construction" },
+  { url: "https://www.seek.co.nz/hospitality-tourism-jobs/in-Auckland", label: "Hospitality" },
+  { url: "https://www.seek.co.nz/sales-jobs/in-Auckland", label: "Sales" },
+  { url: "https://www.seek.co.nz/education-training-jobs/in-Auckland", label: "Education" },
 ];
 
 async function sleep(ms) {

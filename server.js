@@ -210,7 +210,7 @@ async function debugPage() {
     locale: "en-NZ",
   });
   const page = await context.newPage();
-  await page.goto("https://www.seek.co.nz/information-technology-jobs/in-All-New-Zealand?page=1", {
+  await page.goto("https://www.trademe.co.nz/a/jobs/search?search_string=&category=5000", {
     waitUntil: "domcontentloaded",
     timeout: 60000,
   });
